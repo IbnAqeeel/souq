@@ -52,8 +52,12 @@ input,select{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-
 .g4{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .btn{width:100%;margin-top:12px;padding:12px;border:none;border-radius:10px;background:var(--olive);color:#fff;font-weight:700;cursor:pointer}
 .btn.alt{background:var(--gold);color:var(--ink)}
+.btn.danger{background:var(--bad);color:#fff}
 .msg{margin-top:8px;font-size:14px;min-height:20px}
 .msg.ok{color:var(--ok)}.msg.bad{color:var(--bad)}
+.manage-list{list-style:none;padding:0;margin-top:10px;display:grid;gap:6px}
+.manage-item{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.del-btn{background:var(--bad);color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:12px}
 #status{text-align:center;font-size:13px;color:var(--muted);padding:6px}
 @media (prefers-reduced-motion:no-preference){.row{transition:border-color .15s}}
 </style>
@@ -80,8 +84,8 @@ input,select{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-
   <div class="dh"><h2>لوحة الإدارة</h2><button class="x" data-close aria-label="إغلاق">×</button></div>
   <div class="db">
     <fieldset>
-      <legend>إضافة درجات يومية</legend>
-      <label for="aStu">الطالب</label><select id="aStu"></select>
+      <legend>إضافة / تعديل درجات يومية</legend>
+      <label for="aStu">الطالب</label><select id="aStu" onchange="loadStudentScores()"></select>
       <label for="aDate">التاريخ</label><input type="date" id="aDate">
       <div class="g4">
         <div><label for="sA">الحضور (من 10)</label><input type="number" id="sA" min="0" max="10" inputmode="numeric" value="10"></div>
@@ -92,6 +96,14 @@ input,select{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-
       <button class="btn" id="saveScore">حفظ الدرجات</button>
       <p class="msg" id="m1" role="status"></p>
     </fieldset>
+
+    <fieldset>
+      <legend>إدارة وسجلات درجات الطالب</legend>
+      <label for="mStu">اختر الطالب لاستعراض أيامه</label>
+      <select id="mStu" onchange="renderManageScores()"></select>
+      <ul id="mList" class="manage-list"></ul>
+    </fieldset>
+
     <fieldset>
       <legend>إضافة طالب جديد</legend>
       <label for="nName">اسم الطالب</label><input id="nName" autocomplete="off">
@@ -100,6 +112,7 @@ input,select{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-
     </fieldset>
   </div>
 </dialog>
+
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script>
@@ -119,13 +132,15 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const sum = d => FIELDS.reduce((t,[k]) => t + (+d[k]||0), 0);
 let students = {}, scores = {}, isAdmin = false, openId = null;
+
 try {
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
   db.ref("students").on("value", s => { students = s.val() || {}; render(); }, fail);
-  db.ref("scores").on("value", s => { scores = s.val() || {}; $("status").textContent = ""; render(); }, fail);
+  db.ref("scores").on("value", s => { scores = s.val() || {}; $("status").textContent = ""; render(); renderManageScores(); }, fail);
   window._db = db;
 } catch (e) { fail(e); }
+
 function fail(e){ $("status").textContent = "تعذّر الاتصال بقاعدة البيانات — تحقق من إعدادات Firebase."; console.error(e); }
 function totalOf(id){ return Object.values(scores[id] || {}).reduce((t,d) => t + sum(d), 0); }
 function rows(){
@@ -158,11 +173,36 @@ function showStudent(id){
   if (!$("dStudent").open) $("dStudent").showModal();
 }
 function fillSelect(){
-  const sel = $("aStu"), cur = sel.value;
-  sel.innerHTML = Object.entries(students).sort((a,b) => a[1].name.localeCompare(b[1].name,"ar"))
+  const sel1 = $("aStu"), sel2 = $("mStu"), cur1 = sel1.value, cur2 = sel2.value;
+  const opts = Object.entries(students).sort((a,b) => a[1].name.localeCompare(b[1].name,"ar"))
     .map(([id,s]) => `<option value="${esc(id)}">${esc(s.name)}</option>`).join("");
-  if (cur) sel.value = cur;
+  sel1.innerHTML = opts; sel2.innerHTML = opts;
+  if (cur1) sel1.value = cur1;
+  if (cur2) sel2.value = cur2;
+  renderManageScores();
 }
+
+function renderManageScores(){
+  const id = $("mStu").value;
+  const list = $("mList");
+  if (!id || !scores[id]) { list.innerHTML = "<li class='empty'>لا توجد درجات مسجلة لهذا الطالب.</li>"; return; }
+  const days = Object.entries(scores[id]).sort((a,b) => b[0].localeCompare(a[0]));
+  list.innerHTML = days.map(([date, d]) => `
+    <li class="manage-item">
+      <span><b>${esc(date)}</b>: ${sum(d)} نقطة</span>
+      <button class="del-btn" onclick="deleteDayScore('${id}','${date}')">حذف اليوم 🗑️</button>
+    </li>
+  `).join("");
+}
+
+async function deleteDayScore(stuId, date){
+  if (!confirm(`هل أنت تأكد من حذف درجات يوم ${date}؟`)) return;
+  try {
+    await _db.ref(`scores/${stuId}/${date}`).remove();
+    alert("تم حذف درجات هذا اليوم بنجاح.");
+  } catch(e) { alert("تعذّر الحذف."); }
+}
+
 $("board").addEventListener("click", e => { const b = e.target.closest(".row"); if (b) showStudent(b.dataset.id); });
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => { b.closest("dialog").close(); openId = null; });
 document.querySelectorAll("dialog").forEach(d => d.addEventListener("click", e => { if (e.target === d) { d.close(); openId = null; } }));
@@ -175,6 +215,7 @@ $("lock").onclick = () => {
     $("aDate").value = new Date().toISOString().slice(0,10);
   }
   $("dAdmin").showModal();
+  renderManageScores();
 };
 function say(id, text, ok){ const m = $(id); m.textContent = text; m.className = "msg " + (ok ? "ok" : "bad"); }
 $("saveScore").onclick = async () => {
@@ -188,7 +229,8 @@ $("saveScore").onclick = async () => {
   }
   try {
     await _db.ref(`scores/${id}/${date}`).set(v);
-    say("m1",`تم حفظ ${sum(v)} نقطة لـ ${students[id].name}.`,true);
+    say("m1",`تم حفظ/تعديل ${sum(v)} نقطة لـ ${students[id].name}.`,true);
+    renderManageScores();
   } catch (e) { say("m1","تعذّر الحفظ — راجع قواعد Firebase.",false); }
 };
 $("addStu").onclick = async () => {
